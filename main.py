@@ -1,6 +1,8 @@
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.electricity.routes import router as electricity_router
 
 # Create FastAPI app
@@ -8,6 +10,14 @@ app = FastAPI(
     title="TenantVolt Electricity Usage API",
     description="API for retrieving electricity usage data from Firebase Realtime Database",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (you can restrict this in production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 app.include_router(electricity_router, prefix="/electricity", tags=["electricity usage"])
