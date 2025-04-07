@@ -51,24 +51,24 @@ class BillResponse(BaseModel):
     payment_date: Optional[str] = None
     message: str = ""  # Add this field for status messages
 
-class ConnectionStatusRequest(BaseModel):
-    product_id: str
-    status: bool
 
-class ConnectionStatusResponse(BaseModel):
+class TenantRequest(BaseModel):
+    tenant_index: int
     product_id: str
-    status: bool
-    updated_at: str
-    message: str
 
-class UserProductStatus(BaseModel):
-    username: str
-    product_id: str
-    email: Optional[str] = None
+class TenantsListRequest(BaseModel):
+    tenants: List[TenantRequest]
+
+class TenantStatusResponse(BaseModel):
+    tenant_index: int
     connection_status: bool
-    last_active: Optional[str] = None  # Will show the latest timestamp from data if available
 
-class AllConnectionStatusResponse(BaseModel):
-    timestamp: str  # Current UTC time when the request was made
-    users: List[UserProductStatus]
-    total_count: int
+class TenantsStatusResponse(BaseModel):
+    tenants: List[TenantStatusResponse]
+
+class ConnectionStatusUpdate(BaseModel):
+    connection_status: bool
+    product_id: str
+
+class ConnectionStatusUpdateResponse(BaseModel):
+    message: str

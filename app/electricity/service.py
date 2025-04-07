@@ -1,13 +1,10 @@
 from datetime import datetime, timedelta
 import calendar
-
+import logging
+from typing import List
 from fastapi.logger import logger
-
 from app.db.firebase import database
-
-from app.electricity.models import ChartDataPoint, ChartDataResponse, PaymentHistoryResponse, PaymentRecord, \
-    BillResponse, ConnectionStatusResponse, AllConnectionStatusResponse, UserProductStatus
-
+from app.electricity.models import ChartDataPoint, ChartDataResponse,  BillResponse ,TenantRequest, TenantStatusResponse
 
 
 class ElectricityUsageService:
@@ -278,46 +275,6 @@ class ElectricityUsageService:
             )
 
     @staticmethod
-    def get_payment_history(username: str) -> PaymentHistoryResponse:
-        """Get the payment history for a user."""
-        try:
-            # Get user data
-            user_ref_path = f"user_details/{username}"
-            user_data = database.child(user_ref_path).get() or {}
-
-            # Get user email
-            email = user_data.get("email", "")
-
-            # Get payments
-            payments_ref_path = f"user_details/{username}/payments"
-            payments_data = database.child(payments_ref_path).get() or {}
-
-            payment_records = []
-            for month, amount in payments_data.items():
-                try:
-                    payment_records.append(PaymentRecord(
-                        month=month,
-                        amount=float(amount)
-                    ))
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Invalid payment amount for {month}: {amount} - {str(e)}")
-
-            # Sort payments by month (most recent first)
-            payment_records.sort(key=lambda x: x.month, reverse=True)
-
-            return PaymentHistoryResponse(
-                username=username,
-                payments=payment_records,
-                email=email
-            )
-        except Exception as e:
-            logger.error(f"Error retrieving payment history for {username}: {str(e)}")
-            return PaymentHistoryResponse(
-                username=username,
-                payments=[]
-            )
-
-    @staticmethod
     def calculate_billing_tiers(total_kwh: float) -> float:
         """Calculate the bill amount based on the tiered pricing structure."""
         tiers = [
@@ -336,10 +293,15 @@ class ElectricityUsageService:
         # Find the appropriate tier
         for units, price in tiers:
             if total_kwh <= units:
-                return price
+                # Calculate the bill amount by dividing the tier price by the tier's max units
+                # and then multiplying by the actual kWh used
+                unit_price = price / units
+                return unit_price * total_kwh
 
-        # If above the highest tier, use the highest tier price
-        return tiers[-1][1]
+        # If above the highest tier, use the highest tier's unit price
+        highest_units, highest_price = tiers[-1]
+        unit_price = highest_price / highest_units
+        return unit_price * total_kwh
 
     @staticmethod
     def calculate_total_kwh_for_month(product_id: str, year_month: str) -> float:
@@ -464,138 +426,52 @@ class ElectricityUsageService:
                 message=f"Error generating bill: {str(e)}"
             )
 
+
+class ConnectionService:
     @staticmethod
-    def update_connection_status(product_id: str, status: bool) -> ConnectionStatusResponse:
-        """Update the connection status for a product."""
-        try:
-            # Path to the connection_status node
-            status_ref_path = f"electricity_usage/{product_id}/connection_status"
+    async def get_connection_statuses(tenants: List[TenantRequest]) -> List[TenantStatusResponse]:
+        """
+        Get connection statuses for multiple product IDs
+        """
+        result = []
 
-            # Update the status
-            result = database.child(status_ref_path).set(status)
+        for tenant in tenants:
+            try:
+                # Get connection status from Firebase
+                connection_status = database.child(f"electricity_usage/{tenant.product_id}/connection_status").get()
 
-            if result:
-                # Format current time for the response
-                current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                # Handle the case where connection_status might be None or has a .val() method
+                if hasattr(connection_status, 'val'):
+                    connection_status = connection_status.val()
 
-                return ConnectionStatusResponse(
-                    product_id=product_id,
-                    status=status,
-                    updated_at=current_time,
-                    message=f"Connection status for product {product_id} successfully updated to {status}"
-                )
-            else:
-                return ConnectionStatusResponse(
-                    product_id=product_id,
-                    status=status,
-                    updated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                    message=f"Failed to update connection status for product {product_id}"
-                )
-        except Exception as e:
-            logger.error(f"Error updating connection status for {product_id}: {str(e)}")
-            return ConnectionStatusResponse(
-                product_id=product_id,
-                status=status,
-                updated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                message=f"Error: {str(e)}"
-            )
+                # If status is None, default to False
+                connection_status = bool(connection_status) if connection_status is not None else False
 
-    @staticmethod
-    def get_all_connection_statuses() -> AllConnectionStatusResponse:
-        """Get connection status for all users and their products."""
-        try:
-            # Get current timestamp
-            current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-            # Get all users
-            users_ref_path = "user_details"
-            users_data = database.child(users_ref_path).get() or {}
-
-            user_statuses = []
-
-            # Process each user
-            for username, user_data in users_data.items():
-                if not isinstance(user_data, dict):
-                    continue
-
-                # Get user's product_id
-                product_id = user_data.get("product_id")
-                if not product_id:
-                    continue
-
-                # Get user's email
-                email = user_data.get("email", "")
-
-                # Get connection status for the product
-                status_ref_path = f"electricity_usage/{product_id}/connection_status"
-                connection_status = database.child(status_ref_path).get()
-
-                # Default to False if no status is found
-                if connection_status is None:
-                    connection_status = False
-
-                # Try to determine the last active time by finding the most recent data entry
-                last_active = None
-                try:
-                    # Get the electricity usage data for the product
-                    usage_ref_path = f"electricity_usage/{product_id}"
-                    usage_data = database.child(usage_ref_path).get() or {}
-
-                    # Find the most recent date that has data
-                    # Skip non-date keys like "connection_status"
-                    dates = [d for d in usage_data.keys() if d != "connection_status" and "-" in d]
-                    if dates:
-                        # Sort dates in descending order
-                        dates.sort(reverse=True)
-                        latest_date = dates[0]
-
-                        # Find the latest hour in the latest date
-                        latest_date_data = usage_data.get(latest_date, {})
-                        hours = [h for h in latest_date_data.keys() if h.isdigit()]
-                        if hours:
-                            # Sort hours in descending order
-                            hours.sort(key=int, reverse=True)
-                            latest_hour = hours[0]
-
-                            # Find the latest minute in the latest hour
-                            latest_hour_data = latest_date_data.get(latest_hour, {})
-
-                            if isinstance(latest_hour_data, dict):
-                                minutes = [m for m in latest_hour_data.keys() if m.isdigit()]
-                                if minutes:
-                                    # Sort minutes in descending order
-                                    minutes.sort(key=int, reverse=True)
-                                    latest_minute = minutes[0]
-
-                                    # Format the last active time
-                                    last_active = f"{latest_date} {latest_hour}:{latest_minute}"
-                            elif isinstance(latest_hour_data, list):
-                                # Find the last non-null value in the array
-                                for i in range(len(latest_hour_data) - 1, -1, -1):
-                                    if latest_hour_data[i] is not None:
-                                        last_active = f"{latest_date} {latest_hour}:{i:02d}"
-                                        break
-                except Exception as e:
-                    logger.warning(f"Error determining last active time for {product_id}: {str(e)}")
-
-                # Add user status to the list
-                user_statuses.append(UserProductStatus(
-                    username=username,
-                    product_id=product_id,
-                    email=email,
-                    connection_status=connection_status,
-                    last_active=last_active
+                result.append(TenantStatusResponse(
+                    tenant_index=tenant.tenant_index,
+                    connection_status=connection_status
                 ))
 
-            return AllConnectionStatusResponse(
-                timestamp=current_time,
-                users=user_statuses,
-                total_count=len(user_statuses)
-            )
+            except Exception as e:
+                logging.error(f"Error retrieving connection status for product {tenant.product_id}: {str(e)}")
+                # In case of error, assume device is disconnected
+                result.append(TenantStatusResponse(
+                    tenant_index=tenant.tenant_index,
+                    connection_status=False
+                ))
+
+        return result
+
+    @staticmethod
+    async def update_connection_status(product_id: str, connection_status: bool) -> bool:
+        """
+        Update connection status for a product ID
+        Returns True if successful, False otherwise
+        """
+        try:
+            # Update connection status in Firebase
+            database.child(f"electricity_usage/{product_id}/connection_status").set(connection_status)
+            return True
         except Exception as e:
-            logger.error(f"Error retrieving connection statuses: {str(e)}")
-            return AllConnectionStatusResponse(
-                timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                users=[],
-                total_count=0
-            )
+            logging.error(f"Error updating connection status for product {product_id}: {str(e)}")
+            return False

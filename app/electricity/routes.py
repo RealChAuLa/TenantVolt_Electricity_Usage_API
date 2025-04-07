@@ -1,88 +1,11 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 
-from app.electricity.models import (
-    MinutelyUsageRequest,
-    HourlyUsageRequest,
-    DailyUsageRequest,
-    MonthlyUsageRequest,
-    ChartDataResponse, BillResponse, PaymentHistoryResponse, ConnectionStatusResponse, ConnectionStatusRequest,
-    AllConnectionStatusResponse
-)
-from app.electricity.service import ElectricityUsageService
+from app.electricity.models import ( ChartDataResponse, ConnectionStatusUpdate, TenantsStatusResponse, TenantsListRequest)
+from app.electricity.service import ElectricityUsageService, ConnectionService
 
 router = APIRouter()
 
 
-@router.post("/minutely", response_model=ChartDataResponse)
-async def get_minutely_usage(request: MinutelyUsageRequest):
-    """
-    Get minute-by-minute electricity usage for a specific hour in a day.
-
-    Returns data for chart where:
-    - X-axis shows minutes (00-59)
-    - Y-axis shows average watt values
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.get_minutely_usage(
-        request.product_id,
-        request.date,
-        request.hour
-    )
-
-
-@router.post("/hourly", response_model=ChartDataResponse)
-async def get_hourly_usage(request: HourlyUsageRequest):
-    """
-    Get hourly electricity usage for a specific day.
-
-    Returns data for chart where:
-    - X-axis shows hours (00-23)
-    - Y-axis shows average watt values
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.get_hourly_usage(
-        request.product_id,
-        request.date
-    )
-
-
-@router.post("/daily", response_model=ChartDataResponse)
-async def get_daily_usage(request: DailyUsageRequest):
-    """
-    Get daily electricity usage for a specific month.
-
-    Returns data for chart where:
-    - X-axis shows days (01-31)
-    - Y-axis shows average watt values
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.get_daily_usage(
-        request.product_id,
-        request.year_month
-    )
-
-
-@router.post("/monthly", response_model=ChartDataResponse)
-async def get_monthly_usage(request: MonthlyUsageRequest):
-    """
-    Get monthly electricity usage for a specific year.
-
-    Returns data for chart where:
-    - X-axis shows months (01-12)
-    - Y-axis shows average watt values
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.get_monthly_usage(
-        request.product_id,
-        request.year
-    )
-
-
-# Add GET endpoints for more flexibility
 @router.get("/minutely/{product_id}/{date}/{hour}", response_model=ChartDataResponse)
 async def get_minutely_usage_get(product_id: str, date: str, hour: str):
     """
@@ -152,77 +75,31 @@ async def get_monthly_usage_get(product_id: str, year: str):
     return ElectricityUsageService.get_monthly_usage(product_id, year)
 
 
-@router.get("/payments/{username}", response_model=PaymentHistoryResponse)
-async def get_payment_history(username: str):
+@router.post("/connection-status", response_model=TenantsStatusResponse)
+async def get_connection_status(request: TenantsListRequest):
     """
-    Get the payment history for a user.
-
-    - username: The username of the user
-
-    Returns a list of payments made by the user, with month and amount.
-
-    This endpoint is publicly accessible.
+    Get the connection status for each product ID in the request
     """
-    return ElectricityUsageService.get_payment_history(username)
+    tenant_statuses = await ConnectionService.get_connection_statuses(request.tenants)
+    return TenantsStatusResponse(tenants=tenant_statuses)
 
 
-@router.get("/bill/{username}", response_model=BillResponse)
-async def generate_bill(username: str):
+@router.post("/update-connection-status")
+async def update_connection_status(request: ConnectionStatusUpdate):
     """
-    Generate a bill for the past month.
-
-    - username: The username of the user
-
-    If the bill is already paid, returns the paid bill information.
-    If not, generates a new bill based on the electricity usage for the past month.
-
-    This endpoint is publicly accessible.
+    Update the connection status for a specific product ID
     """
-    return ElectricityUsageService.generate_bill(username)
-
-
-@router.post("/connection-status", response_model=ConnectionStatusResponse)
-async def update_connection_status(request: ConnectionStatusRequest):
-    """
-    Update the connection status for a product.
-
-    - product_id: The product identifier
-    - status: Boolean status value (true/false)
-
-    Returns the updated connection status.
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.update_connection_status(
+    success = await ConnectionService.update_connection_status(
         request.product_id,
-        request.status
+        request.connection_status
     )
 
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update connection status for product {request.product_id}"
+        )
 
-@router.get("/connection-status/{product_id}/{status}", response_model=ConnectionStatusResponse)
-async def update_connection_status_get(product_id: str, status: bool):
-    """
-    Update the connection status for a product using GET.
-
-    - product_id: The product identifier
-    - status: Boolean status value (true/false)
-
-    Returns the updated connection status.
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.update_connection_status(product_id, status)
-
-
-@router.get("/connection-status", response_model=AllConnectionStatusResponse)
-async def get_all_connection_statuses():
-    """
-    Get connection status for all users and their products.
-
-    Returns a list of all users with their product IDs and connection statuses.
-    This is useful for displaying a table of all devices and their connection states.
-
-    This endpoint is publicly accessible.
-    """
-    return ElectricityUsageService.get_all_connection_statuses()
-
+    return {
+        "message": f"Connection Status of {request.product_id} updated to {request.connection_status} successfully"
+    }
